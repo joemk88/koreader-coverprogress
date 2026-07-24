@@ -35,7 +35,7 @@ Download this repository (**Code → Download ZIP**), extract it, and confirm th
 
 Restart KOReader.
 
-> **Disable the built-in `coverimage` plugin first.** Go to **Tools → More tools → Plugin management** and untick `coverimage`. Both plugins write to the same default path, and leaving both enabled causes them to race — which can produce a truncated image file that renders with a grey band across the bottom.
+> **Disable the built-in `coverimage` plugin first.** Go to **Tools → More tools → Plugin management** and untick `coverimage`. Both plugins write to the same default path, and leaving both enabled causes them to race.
 
 Then **open a book** — the settings menu is document-only and does not appear in the file browser — and go to:
 
