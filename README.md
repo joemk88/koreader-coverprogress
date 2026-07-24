@@ -87,19 +87,19 @@ Onyx, Tolino and others expose a file-based screensaver setting somewhere in the
 
 Choose under **Screen → Cover screensaver (progress)**. Which one suits you depends on your screen's aspect ratio relative to a typical 2:3 book cover.
 
-### Bar in the margin *(default)*
+### Progress bar in the margin *(default)*
 
 The cover stays centred at full size and the bar sits in the empty band below it.
 
 Best on **tall screens** — e-ink phones like the HiBreak Pro (0.50 aspect) — where a portrait cover is limited by width and physically cannot reach the bottom edge. Nothing is ever drawn over artwork, and the cover isn't shifted or shrunk.
 
-### Bar below cover
+### Progress bar below cover
 
 The cover is shrunk slightly and raised to make room for the bar underneath.
 
 Use on **wider screens** — tablets and most Kobos, around 0.75 aspect — where a cover is limited by height and runs to the bottom edge. Space for the band is reserved *before* the cover is scaled, so the bar can never land on artwork regardless of screen shape. The trade-off is that the cover sits a few percent higher than dead centre.
 
-### Bar over cover
+### Progress bar overlaying cover
 
 Full-bleed cover with a compact bar and percentage drawn on top, anchored bottom-right.
 
