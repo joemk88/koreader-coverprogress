@@ -1,7 +1,7 @@
 --[[--
 @module koplugin.coverprogress
 
-v1.0
+v1.01
 
 Writes the current book cover, overlaid with reading progress, to a single
 fixed path. An external screensaver app points at that path and picks up the
@@ -346,6 +346,8 @@ function CoverProgress:freeBase()
         self.base_bb = nil
     end
     self.cover_rect = nil
+    -- The look changed, so the next render must write even at the same percent.
+    self.last_sig = nil
 end
 
 ------------------------------------------------------------------------------
@@ -656,7 +658,7 @@ end
 -- Render + write
 ------------------------------------------------------------------------------
 
-function CoverProgress:render()
+function CoverProgress:render(force)
     if not self.enabled then return end
     if not self.base_bb then
         if not self:buildBase() then return end
@@ -668,6 +670,21 @@ function CoverProgress:render()
     end
 
     local pct = self:getPercent()
+
+    -- Skip the encode when nothing visible has changed since the last write.
+    -- On this device roughly 20 page flips make one whole percent, so without
+    -- this the same image is re-encoded and rewritten twenty times over.
+    -- The signature is the displayed percent plus, in Kobo mode, the time
+    -- string (which can tick down while the percent holds). A forced call
+    -- (open, suspend, close, background/mode change) always writes.
+    local sig = tostring(math.floor(pct * 100 + 0.5))
+    if self.mode == "kobo" then
+        sig = sig .. "|" .. tostring(self:getTimeToGo(pct) or "")
+    end
+    if not force and sig == self.last_sig then
+        return
+    end
+
     local t_w, t_h = self.base_bb:getWidth(), self.base_bb:getHeight()
 
     -- Fresh copy each time; drawing onto the base would stack overlays.
@@ -711,6 +728,7 @@ function CoverProgress:render()
         return
     end
 
+    self.last_sig = sig
     logger.dbg("CoverProgress: wrote", self.output_path, string.format("%.1f%%", pct * 100))
 end
 
@@ -722,16 +740,18 @@ end
 
 -- A screensaver plugin must never be able to break the reader, so errors are
 -- contained here rather than propagating out of an event handler.
-function CoverProgress:safeRender()
-    local ok, err = pcall(self.render, self)
+function CoverProgress:safeRender(force)
+    local ok, err = pcall(self.render, self, force)
     if not ok then
         logger.warn("CoverProgress: render failed:", err)
     end
 end
 
-function CoverProgress:renderNow()
+-- force = true bypasses the change guard, for writes that must happen even at
+-- an unchanged percentage (book open/close, suspend, background or mode change).
+function CoverProgress:renderNow(force)
     UIManager:unschedule(self.render_callback)
-    self:safeRender()
+    self:safeRender(force)
 end
 
 function CoverProgress:rebuild()
@@ -766,15 +786,15 @@ function CoverProgress:onFlushSettings()
     -- there is nothing meaningful left to read. onCloseDocument covers that
     -- case, so skip rather than racing it.
     if self.closing or not self:docSettings() then return end
-    self:renderNow()
+    self:renderNow(true)
 end
 
 function CoverProgress:onSuspend()
-    self:renderNow()
+    self:renderNow(true)
 end
 
 function CoverProgress:onCloseDocument()
-    self:renderNow()
+    self:renderNow(true)
     self.closing = true
     UIManager:unschedule(self.render_callback)
     self:freeBase()
@@ -859,7 +879,7 @@ function CoverProgress:addToMainMenu(menu_items)
                 end,
                 separator = true,
             },
-            self:menuEntryMode("margin", _("Progress bar in the margin"),
+            self:menuEntryMode("margin", _("Progess bar in the margin"),
                 _("Leaves the cover centred at full size and puts the bar in the empty band below it. Best on tall screens such as phones, where a portrait cover cannot reach the bottom edge.")),
             self:menuEntryMode("below", _("Progress bar below cover"),
                 _("Shrinks and raises the cover to make room for the bar underneath. Use on wider screens such as tablets, where the cover would otherwise run to the bottom edge.")),
@@ -939,7 +959,7 @@ function CoverProgress:addToMainMenu(menu_items)
                 keep_menu_open = true,
                 callback = function()
                     self:buildBase()
-                    self:renderNow()
+                    self:renderNow(true)
                     UIManager:show(InfoMessage:new{
                         text = T(_("Wrote %1"), self.output_path),
                         timeout = 2,
