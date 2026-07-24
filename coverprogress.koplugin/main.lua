@@ -859,7 +859,7 @@ function CoverProgress:addToMainMenu(menu_items)
                 end,
                 separator = true,
             },
-            self:menuEntryMode("margin", _("Progess bar in the margin"),
+            self:menuEntryMode("margin", _("Progress bar in the margin"),
                 _("Leaves the cover centred at full size and puts the bar in the empty band below it. Best on tall screens such as phones, where a portrait cover cannot reach the bottom edge.")),
             self:menuEntryMode("below", _("Progress bar below cover"),
                 _("Shrinks and raises the cover to make room for the bar underneath. Use on wider screens such as tablets, where the cover would otherwise run to the bottom edge.")),
