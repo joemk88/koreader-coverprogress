@@ -1,7 +1,7 @@
 --[[--
 @module koplugin.coverprogress
 
-v1.01
+v1.02
 
 Writes the current book cover, overlaid with reading progress, to a single
 fixed path. An external screensaver app points at that path and picks up the
@@ -363,32 +363,48 @@ function CoverProgress:docSettings()
 end
 
 function CoverProgress:getPercent()
-    local ok, pct = pcall(function()
-        if self.ui.rolling then
-            local pos = self.ui.document:getCurrentPos()
-            local full = self.ui.document:getFullHeight()
-            if full and full > 0 then
-                return pos / full
-            end
-        elseif self.ui.paging then
-            local page = self.ui.view.state.page
-            local total = self.ui.document:getPageCount()
-            if total and total > 0 then
-                return page / total
-            end
+    local function clamp(p)
+        if type(p) == "number" and p == p then
+            return math.min(math.max(p, 0), 1)
         end
         return nil
-    end)
-
-    if ok and pct then
-        return math.min(math.max(pct, 0), 1)
     end
 
+    -- 1. The footer's live value. This is the figure KOReader itself persists
+    --    as percent_finished, kept current for both paged and scrolled
+    --    documents. Earlier versions computed position by hand and read the
+    --    wrong field for paged epubs, so the percentage never moved between
+    --    page turns -- this is the fix for that.
+    local footer = self.ui.view and self.ui.view.footer
+    if footer then
+        local p = clamp(footer.percent_finished)
+        if p then return p end
+    end
+
+    -- 2. getLastPercent(), which ReaderRolling and ReaderPaging each implement
+    --    correctly for their own mode.
+    -- Note: a plain array would hit an ipairs nil-hole when rolling is absent,
+    -- so check each module explicitly.
+    for _, mod in ipairs({ self.ui.rolling or false, self.ui.paging or false }) do
+        if mod and type(mod.getLastPercent) == "function" then
+            local ok, p = pcall(mod.getLastPercent, mod)
+            if ok then
+                p = clamp(p)
+                if p then return p end
+            end
+        end
+    end
+
+    -- 3. Last persisted value, if the reader modules are somehow unavailable.
     local ds = self:docSettings()
     if ds then
-        local got, stored = pcall(ds.readSetting, ds, "percent_finished")
-        if got and type(stored) == "number" then return stored end
+        local ok, stored = pcall(ds.readSetting, ds, "percent_finished")
+        if ok then
+            local p = clamp(stored)
+            if p then return p end
+        end
     end
+
     return 0
 end
 
