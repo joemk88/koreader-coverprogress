@@ -35,7 +35,7 @@ Download this repository (**Code → Download ZIP**), extract it, and confirm th
 
 Restart KOReader.
 
-> **Disable the built-in `coverimage` plugin first.** Go to **Tools → More tools → Plugin management** and untick `coverimage`. Both plugins write to the same default path, and leaving both enabled causes them to race.
+> **Disable the built-in `coverimage` plugin first.** Go to **Tools → More tools → Plugin management** and untick `coverimage`. Both plugins write to the same default path, and leaving both enabled causes them to race — which can produce a truncated image file that renders with a grey band across the bottom.
 
 Then **open a book** — the settings menu is document-only and does not appear in the file browser — and go to:
 
@@ -87,19 +87,21 @@ Onyx, Tolino and others expose a file-based screensaver setting somewhere in the
 
 Choose under **Screen → Cover screensaver (progress)**. Which one suits you depends on your screen's aspect ratio relative to a typical 2:3 book cover.
 
-### Progress bar in the margin *(default)*
+### Bar in the margin *(default)*
 
 The cover stays centred at full size and the bar sits in the empty band below it.
 
 Best on **tall screens** — e-ink phones like the HiBreak Pro (0.50 aspect) — where a portrait cover is limited by width and physically cannot reach the bottom edge. Nothing is ever drawn over artwork, and the cover isn't shifted or shrunk.
 
-### Progress bar below cover
+This mode also supports two extras that use the space a tall screen leaves free — **header text** above the cover and a **page number** above the bar. See [Header text and page number](#header-text-and-page-number). They are only available in this mode, because the other layouts are full-bleed or already carry text and have nowhere to put them.
+
+### Bar below cover
 
 The cover is shrunk slightly and raised to make room for the bar underneath.
 
 Use on **wider screens** — tablets and most Kobos, around 0.75 aspect — where a cover is limited by height and runs to the bottom edge. Space for the band is reserved *before* the cover is scaled, so the bar can never land on artwork regardless of screen shape. The trade-off is that the cover sits a few percent higher than dead centre.
 
-### Progress bar overlaying cover
+### Bar over cover
 
 Full-bleed cover with a compact bar and percentage drawn on top, anchored bottom-right.
 
@@ -112,6 +114,31 @@ Full-bleed cover with a small bordered card showing percentage read and estimate
 The time estimate requires KOReader's **statistics** plugin to be enabled, and needs some reading history for the book before it means anything — see [Time remaining](#time-remaining).
 
 ---
+
+## Header text and page number
+
+Two optional additions available in **Bar in the margin** mode only. In the other modes their menu entries are greyed out — the cover is full-bleed (overlay), raised to the top edge (below), or already shows a text card (Kobo), so there is no free space for them and forcing text in would put it over the artwork.
+
+### Header text
+
+Two lines of your own text, centred in the letterbox above the cover, set in KOReader's built-in monospace font. Edit them under **Screen → Cover screensaver → Header text → Line 1 / Line 2**. Line 1 is the larger of the two, intended as a heading with Line 2 as a subheading beneath it; leaving a line empty hides it. Common uses are a name, a "if found, contact…" line, or a favourite quote.
+
+Because the screensaver image is only regenerated while you are actively reading, header text is a good fit — it is static, so it never goes stale between sessions. (For the same reason the plugin deliberately avoids anything that must be current, such as the date or clock time, which would freeze at whenever you last turned a page.)
+
+### Page number
+
+Toggle **Show page number** to print "page X of Y" above the progress bar. The count is KOReader's page count for the open document, so on a reflowable EPUB it reflects your current font size rather than the print edition.
+
+**This changes how often the image is written.** Normally the plugin only rewrites the file when the whole displayed percentage changes — turning several pages within the same percent produces no write. But a page number changes far more often than the percentage: on a device that shows many small "pages" per real page, the percentage might only tick over every fifteen or twenty page turns. So when the page number is shown, the plugin must rewrite on **every page turn** to keep it accurate, which is what the menu warns about.
+
+The trade-off, in short:
+
+| Show page number | Image rewrites | Displayed detail |
+| --- | --- | --- |
+| Off *(default)* | Only when the whole percentage changes — much less often | Percentage and bar |
+| On | On every page turn | Percentage, bar, and live page number |
+
+If you would rather minimise writes — for battery, or just to keep things quiet — leave it off. If a live page count matters more to you than write frequency, turn it on. You cannot have both a live page number and percentage-only writes, since the page number is the thing changing between percentage steps.
 
 ## Background
 
@@ -142,6 +169,8 @@ If a cover is being classified wrongly, read its percentage from the menu and se
 | Bar below cover | Layout for wider screens |
 | Bar over cover | Compact overlay on a full-bleed cover |
 | Kobo style box | Information card, no bar |
+| Header text (Line 1 / Line 2) | Two custom lines above the cover; margin mode only |
+| Show page number | "page X of Y" above the bar; margin mode only. Forces a write per page turn |
 | White / Black / Auto background | Colour scheme; Auto shows its measurement |
 | Auto: go black above N% dark | Auto sensitivity, 10–90% |
 | Output: *path* | Shows the current output path |
@@ -162,6 +191,9 @@ Stored in `settings.reader.lua` in your KOReader settings directory. Fully exit 
 | `coverprogress_background` | `"auto"` | `white`, `black`, `auto` |
 | `coverprogress_auto_ratio` | `50` | Auto threshold, percent |
 | `coverprogress_debounce` | `5` | Seconds |
+| `coverprogress_header1` | `""` | Header line 1 (margin mode) |
+| `coverprogress_header2` | `""` | Header line 2 (margin mode) |
+| `coverprogress_show_page` | *(unset)* | Show page number; forces per-page writes |
 
 The output format is taken from the file extension — `.jpg`, `.png` or `.bmp`. PNG is worth trying if your covers are hard-edged graphic art, which JPEG handles poorly. Some devices insist on a particular format; PocketBook's screensaver, for instance, wants BMP.
 
