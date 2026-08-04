@@ -1,7 +1,7 @@
 --[[--
 @module koplugin.coverprogress
 
-v1.02
+v1.03
 
 Writes the current book cover, overlaid with reading progress, to a single
 fixed path. An external screensaver app points at that path and picks up the
@@ -58,6 +58,19 @@ local GRAYSCALE          = true
 
 local DEFAULT_MODE       = "margin"  -- "margin" | "below" | "overlay" | "kobo"
 local DEFAULT_BACKGROUND = "auto"    -- "white" | "black" | "auto"
+
+-- Header text and page number are shown in "margin" mode only, where the
+-- centred cover leaves a top letterbox for the header and the band has room
+-- for a page line. The other modes are full-bleed or already carry text, so
+-- these are hidden there rather than drawn over artwork.
+local HEADER_FONT      = "infont"   -- KOReader's built-in Droid Sans Mono alias
+local HEADER1_SIZE     = 20
+local HEADER2_SIZE     = 14
+local HEADER_LINE_GAP  = 4          -- px between the two header lines
+local HEADER_GAP       = 12         -- px between header block and cover top
+local PAGE_FONT        = "infont"
+local PAGE_SIZE        = 18
+local PAGE_ROW_EXTRA   = 8          -- px padding added to the page row height
 
 -- below / overlay
 local FIT_TO_COVER     = true   -- align the bar/box to the cover, not the screen
@@ -206,6 +219,9 @@ function CoverProgress:init()
     self.background = G_reader_settings:readSetting("coverprogress_background", DEFAULT_BACKGROUND)
     self.mode = G_reader_settings:readSetting("coverprogress_mode", DEFAULT_MODE)
     self.auto_ratio = G_reader_settings:readSetting("coverprogress_auto_ratio", AUTO_BG_DARK_RATIO)
+    self.header1 = G_reader_settings:readSetting("coverprogress_header1", "")
+    self.header2 = G_reader_settings:readSetting("coverprogress_header2", "")
+    self.show_page = G_reader_settings:isTrue("coverprogress_show_page")
 
     self.base_bb = nil
 
@@ -281,7 +297,24 @@ function CoverProgress:getContentSpan(t_w)
 end
 
 function CoverProgress:getBandHeight(t_h)
-    return math.floor(t_h * BAND_HEIGHT_PCT / 100)
+    local h = math.floor(t_h * BAND_HEIGHT_PCT / 100)
+    -- The page number sits on its own row above the bar, so the band grows to
+    -- fit it. Margin mode only; see pageRowActive().
+    if self:pageRowActive() then
+        h = h + Screen:scaleBySize(PAGE_SIZE + PAGE_ROW_EXTRA)
+    end
+    return h
+end
+
+-- The header and page number are margin-mode features. Centralised so the
+-- rendering, the band-height reservation and the change signature all agree.
+function CoverProgress:headerActive()
+    return self.mode == "margin"
+        and ((self.header1 or "") ~= "" or (self.header2 or "") ~= "")
+end
+
+function CoverProgress:pageRowActive()
+    return self.mode == "margin" and self.show_page
 end
 
 ------------------------------------------------------------------------------
@@ -360,6 +393,26 @@ function CoverProgress:docSettings()
     local ds = self.ui and self.ui.doc_settings
     if ds and ds.data then return ds end
     return nil
+end
+
+-- Current page and total for the open document, or nil,nil.
+function CoverProgress:getPageInfo()
+    local ok, cur, total = pcall(function()
+        local doc = self.ui.document
+        local total = doc:getPageCount()
+        local cur
+        if self.ui.view and self.ui.view.state and self.ui.view.state.page then
+            cur = self.ui.view.state.page
+        end
+        if not cur and doc.getCurrentPage then
+            cur = doc:getCurrentPage()
+        end
+        return cur, total
+    end)
+    if ok and type(cur) == "number" and type(total) == "number" and total > 0 then
+        return cur, total
+    end
+    return nil, nil
 end
 
 function CoverProgress:getPercent()
@@ -477,6 +530,73 @@ function CoverProgress:drawBand(bb, pct)
 
     local span_x, span_w = self:getContentSpan(t_w)
 
+    -- Header block centred vertically within the top letterbox -- the gap
+    -- between the screen top and the cover -- and centred horizontally over
+    -- the cover.
+    if self:headerActive() and self.cover_rect then
+        local rows = {}
+        if (self.header1 or "") ~= "" then
+            table.insert(rows, { text = self.header1, size = HEADER1_SIZE })
+        end
+        if (self.header2 or "") ~= "" then
+            table.insert(rows, { text = self.header2, size = HEADER2_SIZE })
+        end
+
+        local widgets, block_h = {}, 0
+        local line_gap = Screen:scaleBySize(HEADER_LINE_GAP)
+        for i, row in ipairs(rows) do
+            local w = TextWidget:new{
+                text = row.text,
+                face = pickFace(HEADER_FONT, row.size),
+                fgcolor = fg,
+            }
+            widgets[i] = w
+            block_h = block_h + w:getSize().h
+            if i < #rows then block_h = block_h + line_gap end
+        end
+
+        -- Position within the letterbox (0 .. cover top). 0.5 would centre the
+        -- block; a larger fraction pushes it downward toward the cover. 0.6
+        -- sits it in the lower part of the letterbox.
+        local letterbox = self.cover_rect.y
+        local HEADER_V_POS = 0.6
+        local top = math.floor((letterbox - block_h) * HEADER_V_POS)
+        local min_top = Screen:scaleBySize(4)
+        local max_top = letterbox - Screen:scaleBySize(HEADER_GAP) - block_h
+        if top > max_top then top = max_top end
+        if top < min_top then top = min_top end
+        local y = top
+        for i, w in ipairs(widgets) do
+            local sz = w:getSize()
+            w:paintTo(bb, span_x + math.floor((span_w - sz.w) / 2), y)
+            y = y + sz.h + ((i < #widgets) and line_gap or 0)
+            w:free()
+        end
+    end
+
+    -- Page row occupies the top of the band; the bar and percentage take the
+    -- rest. When the page row is inactive, page_row_h is 0 and the layout is
+    -- exactly as before.
+    local page_row_h = 0
+    if self:pageRowActive() then
+        page_row_h = Screen:scaleBySize(PAGE_SIZE + PAGE_ROW_EXTRA)
+        local cur, total = self:getPageInfo()
+        if cur and total then
+            local ptext = TextWidget:new{
+                text = T(_("page %1 of %2"), cur, total),
+                face = pickFace(PAGE_FONT, PAGE_SIZE),
+                fgcolor = fg,
+            }
+            local psz = ptext:getSize()
+            ptext:paintTo(bb, span_x + pad,
+                band_y + math.floor((page_row_h - psz.h) / 2))
+            ptext:free()
+        end
+    end
+
+    local row_y = band_y + page_row_h
+    local row_h = band_h - page_row_h
+
     local label = TextWidget:new{
         text = string.format("%d%%", math.floor(pct * 100 + 0.5)),
         face = Font:getFace("cfont", PCT_FONT_SIZE),
@@ -485,13 +605,13 @@ function CoverProgress:drawBand(bb, pct)
     }
     local label_size = label:getSize()
     local label_x = span_x + span_w - pad - label_size.w
-    label:paintTo(bb, label_x, band_y + math.floor((band_h - label_size.h) / 2))
+    label:paintTo(bb, label_x, row_y + math.floor((row_h - label_size.h) / 2))
     label:free()
 
     local bar_h = Screen:scaleBySize(BAR_THICKNESS)
     local bar_x = span_x + pad
     local bar_w = label_x - pad - bar_x
-    local bar_y = band_y + math.floor((band_h - bar_h) / 2)
+    local bar_y = row_y + math.floor((row_h - bar_h) / 2)
     if bar_w > 0 then
         local t = Screen:scaleBySize(1)
         paintOutline(bb, bar_x, bar_y, bar_w, bar_h, t, fg)
@@ -697,6 +817,13 @@ function CoverProgress:render(force)
     if self.mode == "kobo" then
         sig = sig .. "|" .. tostring(self:getTimeToGo(pct) or "")
     end
+    -- With the page number shown, the display changes several times per whole
+    -- percent, so the page must be in the signature or it would lag. This is
+    -- the source of the extra writes noted in the menu help.
+    if self:pageRowActive() then
+        local cur = select(1, self:getPageInfo())
+        sig = sig .. "|p" .. tostring(cur or "")
+    end
     if not force and sig == self.last_sig then
         return
     end
@@ -842,6 +969,51 @@ function CoverProgress:menuEntryMode(mode, label, help, separator)
     }
 end
 
+-- One editable header line. Opens a text input; empty clears it.
+function CoverProgress:menuEntryHeaderText(which)
+    local key = "coverprogress_header" .. which
+    local field = "header" .. which
+    return {
+        text_func = function()
+            local val = self[field] or ""
+            if val == "" then
+                return T(_("Line %1: (empty)"), which)
+            end
+            return T(_("Line %1: %2"), which, val)
+        end,
+        keep_menu_open = true,
+        callback = function(touchmenu_instance)
+            local InputDialog = require("ui/widget/inputdialog")
+            local dialog
+            dialog = InputDialog:new{
+                title = T(_("Header line %1"), which),
+                input = self[field] or "",
+                input_hint = _("Leave empty to hide"),
+                buttons = {{
+                    {
+                        text = _("Cancel"),
+                        id = "close",
+                        callback = function() UIManager:close(dialog) end,
+                    },
+                    {
+                        text = _("Save"),
+                        is_enter_default = true,
+                        callback = function()
+                            self[field] = dialog:getInputText() or ""
+                            G_reader_settings:saveSetting(key, self[field])
+                            UIManager:close(dialog)
+                            self:rebuild()
+                            if touchmenu_instance then touchmenu_instance:updateItems() end
+                        end,
+                    },
+                }},
+            }
+            UIManager:show(dialog)
+            dialog:onShowKeyboard()
+        end,
+    }
+end
+
 function CoverProgress:menuEntryBackground(color, label, separator)
     return {
         text_func = function()
@@ -903,6 +1075,39 @@ function CoverProgress:addToMainMenu(menu_items)
                 _("Full-bleed cover with a compact bar drawn on top, placed to avoid lettering and coloured black or white to suit whatever sits beneath it.")),
             self:menuEntryMode("kobo", _("Kobo style box"),
                 _("Full-bleed cover with a small bordered card showing percentage read and time remaining. No progress bar."), true),
+            {
+                text_func = function()
+                    local n = 0
+                    if (self.header1 or "") ~= "" then n = n + 1 end
+                    if (self.header2 or "") ~= "" then n = n + 1 end
+                    if n == 0 then return _("Header text (margin mode)") end
+                    return T(_("Header text: %1 line(s)"), n)
+                end,
+                enabled_func = function()
+                    return self.mode == "margin"
+                end,
+                help_text = _("Two lines of text above the cover, shown in the margin layout only. The other layouts have no room for it."),
+                sub_item_table = {
+                    self:menuEntryHeaderText(1),
+                    self:menuEntryHeaderText(2),
+                },
+            },
+            {
+                text = _("Show page number"),
+                enabled_func = function()
+                    return self.mode == "margin"
+                end,
+                checked_func = function()
+                    return self.show_page
+                end,
+                help_text = _("Shows 'page X of Y' above the bar, in the margin layout. Note: with this on, the image is rewritten on every page turn. With it off, the image is rewritten only when the whole percentage changes, which is far less often."),
+                callback = function()
+                    self.show_page = not self.show_page
+                    G_reader_settings:saveSetting("coverprogress_show_page", self.show_page)
+                    self:rebuild()
+                end,
+                separator = true,
+            },
             self:menuEntryBackground("white", _("White background, black text")),
             self:menuEntryBackground("black", _("Black background, white text")),
             self:menuEntryBackground("auto", _("Auto background")),
