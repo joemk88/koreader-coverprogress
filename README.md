@@ -244,6 +244,10 @@ If the line doesn't appear at all, check that the statistics plugin is enabled i
 
 **No menu entry.** The settings are document-only. Open a book first; the entry does not exist in the file browser. Also confirm the plugin is ticked in **Tools → More tools → Plugin management** — that checkbox controls whether the plugin *loads*, which is separate from the Enabled toggle in the Screen menu.
 
+**The entry is under Settings, not Screen (or shows a "NEW:" prefix in the first menu).** Your menu is missing the reader **Screen** section. That happens on some stripped or older builds, and with menu-customising plugins such as **Simple UI** or **Menu Customizer**, which write a persistent menu-order override — so disabling those plugins afterwards does not restore the section. The plugin detects this and places its entry under **Settings** instead, falling back to the first menu if that is gone too. Everything works the same; only the location differs.
+
+**KOReader crashes the instant you open the reader top menu.** This was a KOReader core bug: `MenuSorter` did not guard a `sorting_hint` whose target section was missing, so on a menu lacking the **Screen** section it dereferenced a nil during menu assembly and took the whole app down. Because the crash was in core — after this plugin had already handed its menu over — it produced no `crash.log`. Fixed from **v1.05**: the plugin validates its placement against your actual menu order and never hands core an unresolvable hint. If you are on an older build of this plugin and see this, update.
+
 **Plugin ticked in Plugin management but no Screen menu entry.** That combination means the plugin was found but failed to load, since the Plugin management list is built from `_meta.lua` alone. On Android, get the reason from logcat:
 
 ```
@@ -256,7 +260,7 @@ Restart KOReader, open a book, then:
 adb shell "logcat -d | grep -i -e coverprogress -e plugin -e lua"
 ```
 
-A load failure appears as a `.lua:NN:` line naming the file and line number. Note that Android builds do not write `crash.log` — that's a Kobo and desktop thing, so its absence means nothing.
+A load failure appears as a `.lua:NN:` line naming the file and line number. Note that Android builds do not write `crash.log` — that's a Kobo and desktop thing, so its absence means nothing. Separately, if this plugin ever catches an internal error while building or driving its menu, it writes a traceback to `coverprogress_crash.log` in the KOReader data directory (e.g. `/sdcard/koreader/`) and keeps the reader running rather than crashing it — so that file, if present, is the first place to look.
 
 **Windows note:** put quotes around the remote command so `grep` and `tail` run on the device rather than on Windows. In PowerShell, call `adb.exe` explicitly — a bare `adb` can resolve to an extensionless file in `system32` and fail with *"Cannot run a document in the middle of a pipeline"*.
 
@@ -275,7 +279,8 @@ A load failure appears as a `.lua:NN:` line naming the file and line number. Not
 ## Notes
 
 - The image is rewritten after a quiet period following the last page turn (5s by default), and immediately on book open, settings flush, suspend and close. A full-page encode on every page turn would be wasteful.
-- Rendering errors are contained and logged rather than propagating — a screensaver plugin should never be able to break the reader.
+- Rendering *and menu* errors are contained and logged rather than propagating — a screensaver plugin should never be able to break the reader. Caught errors are written to `coverprogress_crash.log` in the KOReader data directory with a full traceback.
+- Menu placement adapts to your actual menu order: it prefers the **Screen** section, falls back to **Settings**, then to a safe orphan, so a menu missing sections (stripped builds, or menu-customising plugins) can never trigger a sorting crash.
 - There is no disk cache. The built-in `coverimage` caches by filename and settings, which would serve a stale percentage.
 - Writes go to a temporary file and are renamed into place, so a screensaver app can never read a half-written image.
 
