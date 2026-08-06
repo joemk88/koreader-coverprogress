@@ -6,6 +6,8 @@ Open a book, lock the device, and the lock screen shows that book's cover and ho
 
 Works on **Android e-readers** (Bigme, Onyx, Tolino and similar), **Kobo**, and the KOReader desktop emulator.
 
+<img width="847" height="1448" alt="coverprogress" src="https://github.com/user-attachments/assets/e9b548e0-b995-4f73-bff6-3c9b02e7f2c3" />
+
 ---
 
 ## How it works
