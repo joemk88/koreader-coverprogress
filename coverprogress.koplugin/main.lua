@@ -1,7 +1,18 @@
 --[[--
 @module koplugin.coverprogress
 
-v1.03
+v1.06
+
+v1.06: the display-mode and background menu entries render as radio buttons
+       (mutually exclusive) rather than checkmarks.
+v1.05: fixes an instant crash on opening the reader top menu on setups that
+       lack the "screen" menu section (stripped builds, or plugins such as
+       Simple UI / Menu Customizer, whose persistent menu-order override
+       removes it). KOReader's MenuSorter does not guard a sorting_hint whose
+       target section is missing and crashes in core during menu assembly. The
+       hint is now validated against the effective menu order and falls back to
+       "setting", then to a safe orphan, if "screen" is unavailable. Menu build
+       is also wrapped with self-logging crash capture (coverprogress_crash.log).
 
 Writes the current book cover, overlaid with reading progress, to a single
 fixed path. An external screensaver app points at that path and picks up the
@@ -32,6 +43,160 @@ local _ = require("gettext")
 local T = require("ffi/util").template
 
 local Screen = Device.screen
+
+------------------------------------------------------------------------------
+-- Crash capture (added v1.04)
+--
+-- Android KOReader writes no crash.log, and on mt6765 the logcat buffer the
+-- crash screen tails is flooded by the MediaTek GED GPU driver, so the real
+-- Lua traceback rotates out before it can be read. This captures it ourselves,
+-- via xpcall (whose handler runs BEFORE the stack unwinds, so the traceback is
+-- the actual crash stack), and writes it to a file any file manager can find:
+--   <koreader data dir>/coverprogress_crash.log   (e.g. /sdcard/koreader/)
+-- It also stops a bad menu entry from ever taking KOReader down.
+------------------------------------------------------------------------------
+
+local CP_CRASH_LOG = DataStorage:getDataDir() .. "/coverprogress_crash.log"
+local cp_unpack = table.unpack or unpack
+
+-- KOReader version string, best-effort. Included in crash logs so a report
+-- identifies the build without a separate round-trip.
+local CP_KOVER = "?"
+do
+    local ok, Version = pcall(require, "version")
+    if ok and Version then
+        local ok2, rev = pcall(function()
+            if Version.getCurrentRevision then return Version:getCurrentRevision() end
+            if Version.getNormalizedCurrentVersion then return Version:getNormalizedCurrentVersion() end
+        end)
+        if ok2 and rev then CP_KOVER = tostring(rev) end
+    end
+end
+
+-- Appends a caught error, with a full traceback, to CP_CRASH_LOG. Only ever
+-- called from the crash guards below, so the file exists only if something
+-- actually went wrong.
+local function cpLogError(where, err)
+    logger.err("coverprogress [" .. tostring(where) .. "]: " .. tostring(err))
+    local ok, f = pcall(io.open, CP_CRASH_LOG, "a")
+    if ok and f then
+        f:write(os.date("!%Y-%m-%dT%H:%M:%SZ"),
+                "  device=", tostring(Device.model),
+                "  koreader=", CP_KOVER,
+                "\n  where=", tostring(where), "\n",
+                tostring(err), "\n\n")
+        f:close()
+    end
+end
+
+-- Wraps fn so a throw is logged with a full traceback and swallowed, returning
+-- `fallback` instead. Extra args and return values are passed through, so it is
+-- safe to wrap menu callbacks that receive touchmenu_instance.
+local function cpGuard(where, fn, fallback)
+    return function(...)
+        local n = select("#", ...)
+        local args = { ... }
+        local res
+        local ok, err = xpcall(function()
+            res = fn(cp_unpack(args, 1, n))
+        end, function(e)
+            return tostring(e) .. "\n" .. debug.traceback("", 2)
+        end)
+        if not ok then
+            cpLogError(where, err)
+            return fallback
+        end
+        return res
+    end
+end
+
+-- Menu fields KOReader may evaluate at build or interaction time. The key-set
+-- says which function fields to wrap; the fallback map says what a caught error
+-- should return so the entry degrades instead of the whole app dying. A field
+-- whose fallback is nil (callbacks) simply becomes a no-op on error.
+local CP_MENU_FUNC_KEYS = {
+    text_func = true, help_text_func = true,
+    checked_func = true, enabled_func = true,
+    callback = true, hold_callback = true,
+}
+local CP_MENU_FUNC_FALLBACK = {
+    text_func = "\226\154\160",  -- warning glyph if a label throws
+    help_text_func = "",
+    checked_func = false,
+    enabled_func = false,
+}
+
+-- Recursively wrap every menu-func field in a built menu subtree.
+local function cpWrapMenuTree(node, path)
+    if type(node) ~= "table" then return node end
+    for k, v in pairs(node) do
+        if type(v) == "function" and CP_MENU_FUNC_KEYS[k] then
+            node[k] = cpGuard(tostring(path) .. "." .. tostring(k), v,
+                              CP_MENU_FUNC_FALLBACK[k])
+        elseif type(v) == "table" then
+            cpWrapMenuTree(v, tostring(path) .. "/" .. tostring(k))
+        end
+    end
+    return node
+end
+
+-- Some builds, and UI-stripping plugins such as Simple UI, remove reader menu
+-- sections. KOReader's MenuSorter does NOT guard a sorting_hint whose target is
+-- missing: findById() returns nil and the next line indexes nil.sub_item_table,
+-- crashing during menu assembly -- in core, after addToMainMenu has returned, so
+-- it cannot be caught by this plugin. Returns the hint only if that section is
+-- still present in the effective reader menu order (base order merged with the
+-- user override, exactly as MenuSorter:mergeAndSort does); otherwise nil, so the
+-- entry orphans into the first menu instead of taking KOReader down.
+local function cpSafeSortingHint(candidates)
+    -- Merge base order with the user override exactly as MenuSorter:mergeAndSort
+    -- does (per-key replace). A persistent override written by Menu Customizer /
+    -- Simple UI lives at this same path, so disabling those plugins does not undo
+    -- it -- which is why the section stays missing. We read the same effective
+    -- order and return the FIRST candidate whose section is both reachable from
+    -- the top-level menu buttons AND defined (the two conditions under which
+    -- MenuSorter:findById returns a real node instead of nil). If none resolve,
+    -- return nil so the entry orphans safely instead of crashing core.
+    local merged = {}
+    local ok, base = pcall(require, "ui/elements/reader_menu_order")
+    if ok and type(base) == "table" then
+        for k, v in pairs(base) do merged[k] = v end
+    end
+    local ok2, user = pcall(dofile,
+        DataStorage:getSettingsDir() .. "/reader_menu_order.lua")
+    if ok2 and type(user) == "table" then
+        for k, v in pairs(user) do merged[k] = v end
+    end
+
+    local roots = merged["KOMenu:menu_buttons"]
+
+    local function resolves(hint)
+        if type(roots) ~= "table" then
+            return merged[hint] ~= nil            -- unknown shape: definition only
+        end
+        local seen, queue = {}, {}
+        for _, id in ipairs(roots) do queue[#queue + 1] = id end
+        while #queue > 0 do
+            local id = table.remove(queue)
+            if id == hint then
+                return merged[hint] ~= nil        -- reachable AND defined
+            end
+            if not seen[id] then
+                seen[id] = true
+                local children = merged[id]
+                if type(children) == "table" then
+                    for _, cid in ipairs(children) do queue[#queue + 1] = cid end
+                end
+            end
+        end
+        return false
+    end
+
+    for _, hint in ipairs(candidates) do
+        if resolves(hint) then return hint end
+    end
+    return nil
+end
 
 ------------------------------------------------------------------------------
 -- Tunables
@@ -956,6 +1121,7 @@ function CoverProgress:menuEntryMode(mode, label, help, separator)
         text = label,
         help_text = help,
         separator = separator,
+        radio = true,  -- mutually exclusive: show a radio dot, not a checkmark
         checked_func = function()
             return self.mode == mode
         end,
@@ -1028,6 +1194,7 @@ function CoverProgress:menuEntryBackground(color, label, separator)
             return label
         end,
         separator = separator,
+        radio = true,  -- mutually exclusive: show a radio dot, not a checkmark
         help_text = color == "auto"
             and _("Picks white or black per book by counting how much of the cover is dark.")
             or nil,
@@ -1044,8 +1211,20 @@ function CoverProgress:menuEntryBackground(color, label, separator)
 end
 
 function CoverProgress:addToMainMenu(menu_items)
+    -- Resolve placement safely. On setups missing the reader "screen" section, a
+    -- "screen" hint crashes core MenuSorter (see cpSafeSortingHint); we validate
+    -- a short chain and fall back to a safe orphan if none of them exist.
+    local hint = cpSafeSortingHint({ "screen", "setting" })
+    if hint ~= "screen" then
+        logger.info("coverprogress: reader 'screen' section unavailable; placing entry under '"
+                    .. tostring(hint or "first menu (orphaned)") .. "'")
+    end
+
+    -- Build under xpcall: a throw here (or in any menuEntry* helper it calls)
+    -- is captured with a real traceback instead of crashing KOReader.
+    local build_ok, build_err = xpcall(function()
     menu_items.coverprogress = {
-        sorting_hint = "screen",
+        sorting_hint = hint,
         text = _("Cover screensaver (with progress)"),
         checked_func = function()
             return self.enabled
@@ -1067,7 +1246,7 @@ function CoverProgress:addToMainMenu(menu_items)
                 end,
                 separator = true,
             },
-            self:menuEntryMode("margin", _("Progess bar in the margin"),
+            self:menuEntryMode("margin", _("Progress bar in the margin"),
                 _("Leaves the cover centred at full size and puts the bar in the empty band below it. Best on tall screens such as phones, where a portrait cover cannot reach the bottom edge.")),
             self:menuEntryMode("below", _("Progress bar below cover"),
                 _("Shrinks and raises the cover to make room for the bar underneath. Use on wider screens such as tablets, where the cover would otherwise run to the bottom edge.")),
@@ -1189,6 +1368,31 @@ function CoverProgress:addToMainMenu(menu_items)
             },
         },
     }
+    end, function(e)
+        return tostring(e) .. "\n" .. debug.traceback("", 2)
+    end)
+
+    -- Build failed: log the traceback and install a harmless placeholder entry
+    -- so the menu still opens and the user knows where to look.
+    if not build_ok then
+        cpLogError("addToMainMenu", build_err)
+        menu_items.coverprogress = {
+            sorting_hint = hint,
+            text = _("Cover screensaver (menu build error)"),
+            keep_menu_open = true,
+            callback = function()
+                UIManager:show(InfoMessage:new{
+                    text = T(_("coverprogress could not build its menu.\nA traceback was saved to:\n%1"),
+                        CP_CRASH_LOG),
+                })
+            end,
+        }
+        return
+    end
+
+    -- Build succeeded: wrap every text/checked/enabled/callback in the tree so
+    -- an error at interaction time is logged and swallowed, not fatal.
+    cpWrapMenuTree(menu_items.coverprogress, "coverprogress")
 end
 
 return CoverProgress
