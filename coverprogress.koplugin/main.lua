@@ -1,8 +1,12 @@
 --[[--
 @module koplugin.coverprogress
 
-v1.06
+v1.07
 
+v1.07: the Kobo-style info box now slides vertically to avoid the title and
+       author on the cover, using the same flat-strip search as the overlay
+       bar. It keeps the Kobo left placement and stays near its usual height,
+       moving only when a cleaner strip is nearby. Toggle KOBO_FIND_QUIET.
 v1.06: the display-mode and background menu entries render as radio buttons
        (mutually exclusive) rather than checkmarks.
 v1.05: fixes an instant crash on opening the reader top menu on setups that
@@ -284,6 +288,17 @@ local KOBO_BODY_SIZE   = 17
 -- Kobo sets its sleep screen in a serif. Falls back to the default sans if
 -- this font is not present in the build.
 local KOBO_SERIF       = "./fonts/noto/NotoSerif-Regular.ttf"
+
+-- The box otherwise sits at a fixed height and can land on the title or
+-- author. When this is on, it slides vertically to find the flattest strip
+-- (least lettering/detail underneath), keeping the Kobo-style left placement.
+-- KOBO_BOX_Y_PCT stays the preferred position; the search only moves away
+-- from it when that spot is busier than a cleaner one nearby.
+local KOBO_FIND_QUIET   = true
+local KOBO_SEARCH_PCT   = 60    -- vertical range to search, % of cover height
+local KOBO_CANDIDATES   = 14    -- positions tried across that range
+local KOBO_SAMPLE_STEP  = 5     -- pixel stride when scoring a candidate
+local KOBO_HOME_BIAS    = 0.04  -- pull back toward KOBO_BOX_Y_PCT, per px of drift
 
 ------------------------------------------------------------------------------
 
@@ -930,11 +945,53 @@ function CoverProgress:drawKoboBox(bb, pct)
 
     local span_x, span_w = self:getContentSpan(t_w)
     local box_x = span_x + Screen:scaleBySize(KOBO_MARGIN)
-    local box_y = math.floor(t_h * KOBO_BOX_Y_PCT / 100)
-
     if box_w > span_w then box_w = span_w end
     if box_x + box_w > t_w then box_x = math.max(0, t_w - box_w) end
-    if box_y + box_h > t_h then box_y = math.max(0, t_h - box_h - frame) end
+
+    -- Preferred position, and the range the box may travel within.
+    local home_y = math.floor(t_h * KOBO_BOX_Y_PCT / 100)
+
+    -- Keep the box on the cover artwork, not out in the letterbox.
+    local r = self.cover_rect
+    local lo_y = (r and r.y) or 0
+    local hi_y = (r and math.min(r.y + r.h, t_h)) or t_h
+    local min_y = lo_y
+    local max_y = math.max(min_y, math.min(hi_y, t_h) - box_h - frame)
+
+    local function clampY(y)
+        if y < min_y then return min_y end
+        if y > max_y then return max_y end
+        return y
+    end
+
+    local box_y = clampY(home_y)
+
+    -- Slide vertically to the flattest strip so the box avoids the title and
+    -- author text. Low standard deviation means no lettering or detail, light
+    -- or dark. A pull toward the home position keeps the box from wandering
+    -- far for a marginal gain, so it stays roughly where Kobo would put it.
+    if KOBO_FIND_QUIET then
+        local range = math.floor((hi_y - lo_y) * KOBO_SEARCH_PCT / 100)
+        local top_y = clampY(home_y - math.floor(range / 2))
+        local bot_y = clampY(home_y + math.floor(range / 2))
+        if bot_y > top_y then
+            local step = math.max(1, math.floor((bot_y - top_y) / KOBO_CANDIDATES))
+            local best_score
+            for cy = top_y, bot_y, step do
+                -- Score the box's own footprint plus a little margin, so text
+                -- just outside the border still counts against a position.
+                local _m, sd = sampleStats(bb, box_x, cy, box_w, box_h, KOBO_SAMPLE_STEP)
+                if sd then
+                    local score = sd + math.abs(cy - home_y) * KOBO_HOME_BIAS
+                    if not best_score or score < best_score then
+                        best_score, box_y = score, cy
+                    end
+                end
+            end
+        end
+    end
+
+    box_y = clampY(box_y)
 
     -- White card, then the ruled panel inset within it.
     bb:paintRect(box_x, box_y, box_w, box_h, bg)
