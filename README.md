@@ -7,7 +7,8 @@ Open a book, lock the device, and the lock screen shows that book's cover and ho
 Works on **Android e-readers** (Bigme, Onyx, Tolino and similar), **Kobo**, and the KOReader desktop emulator.
 
 
-<img width="752" height="987" alt="finale" src="https://github.com/user-attachments/assets/b49292e7-9d67-4235-9e8d-52e94c43f115" />
+<img width="752" height="978" alt="finale" src="https://github.com/user-attachments/assets/81502cd1-0bf7-46d8-afe3-c3f65f533037" />
+
 
 
 ---
